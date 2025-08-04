@@ -6,6 +6,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"log"
 	"time"
 )
 
@@ -78,6 +79,25 @@ func (lb *loadBalancer) serverProxy(rw http.ResponseWriter, req *http.Request) {
 	fmt.Printf("forwarding request to address:%q\n", targetServer.Address())
 	targetServer.Serve(rw, req)
 }
+func logRequestToFile(req *http.Request, targetAddr string) {
+	logFile, err := os.OpenFile("requests.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Printf("error opening log file: %v\n", err)
+		return
+	}
+	defer logFile.Close()
+
+	logger := log.New(logFile, "", log.LstdFlags)
+	logger.Printf("Method: %s, URL: %s, Forwarded To: %s\n", req.Method, req.URL.String(), targetAddr)
+}
+
+func withLogging(lb *loadBalancer, handler func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
+	return func(rw http.ResponseWriter, req *http.Request) {
+		target := lb.getNextServer()
+		logRequestToFile(req, target.Address())
+		target.Serve(rw, req)
+	}
+}
 
 func main() {
 	servers := []Server{
@@ -91,7 +111,8 @@ func main() {
 	handleRedirect := func(rw http.ResponseWriter, req *http.Request) {
 		lb.serverProxy(rw, req)
 	}
-	http.HandleFunc("/", handleRedirect)
+	http.HandleFunc("/", withLogging(lb, handleRedirect))
+
 
 	fmt.Printf("serving requests at 'localhost:%s'\n", lb.port)
 	http.ListenAndServe(":"+lb.port, nil)
